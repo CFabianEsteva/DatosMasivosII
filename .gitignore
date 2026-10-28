@@ -32,3 +32,8 @@ report/*.synctex.gz
 *.pdf
 !report/informe.pdf
 plantrabajo.png
+
+# Solo locales (no van a GitHub)
+checkpoint.md
+requirements.txt
+PLAN_DE_TRABAJO.md
