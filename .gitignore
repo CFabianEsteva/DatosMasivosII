@@ -1,0 +1,34 @@
+# Datos y salidas pesadas (no se suben)
+enwiki.xml
+Cit-HepPh.txt
+snap.txt
+spotify/
+data/
+results/raw/
+*.parquet
+
+# Python / Spark / Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# LaTeX
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc
+report/*.bbl
+report/*.blg
+report/*.fls
+report/*.fdb_latexmk
+report/*.synctex.gz
+
+# Sistema / editor
+.vscode/
+.DS_Store
+*.pdf
+!report/informe.pdf
+plantrabajo.png

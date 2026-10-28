@@ -1,0 +1,128 @@
+% Informe - Práctica 3, Datos Masivos II
+% Compilar con:  latexmk -pdf informe.tex     (o desde VS Code con LaTeX Workshop)
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\decimalpoint
+\usepackage{amsmath,amssymb}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs,array,enumitem,graphicx}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+
+\setlist{itemsep=1pt,topsep=3pt,parsep=0pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\renewcommand{\arraystretch}{1.2}
+\graphicspath{{figuras/}}
+
+% Marca visible para lo que falta llenar con los resultados finales
+\newcommand{\pend}[1]{\textcolor{red!70!black}{\textbf{[PENDIENTE: #1]}}}
+
+\title{Práctica 3: Análisis de vínculos con PageRank, HITS\\y PageRank Sensible a Tópico}
+\author{\pend{nombre del alumno}\\Datos Masivos II --- Lic. en Ciencia de Datos}
+\date{\pend{fecha de entrega}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Se implementan en el paradigma MapReduce, sobre PySpark, los algoritmos PageRank, HITS y PageRank Sensible a Tópico, y se aplican a tres grafos de tamaños muy distintos: la red de citas cit-HepPh, la red de colaboraciones de artistas de Spotify y los enlaces entre artículos de la Wikipedia en inglés. Se describen los algoritmos, el tratamiento de los datos (en particular, la reducción del grafo de Wikipedia), la validación contra implementaciones de referencia y los rankings obtenidos. \pend{una frase con el hallazgo principal}
+\end{abstract}
+
+\section{Introducción}
+El análisis de vínculos asigna importancia a los nodos de una red a partir de su estructura. PageRank \cite{page1999pagerank} lo modela como un paseante aleatorio, HITS \cite{kleinberg1999hits} separa a los nodos en \emph{hubs} y \emph{autoridades}, y el PageRank Sensible a Tópico \cite{haveliwala2002topic} sesga el teletransporte hacia un conjunto de páginas de un tema. La referencia principal del curso es el capítulo 5 de \cite{leskovec2016mining}.
+
+El objetivo es aplicar los tres algoritmos a los tres conjuntos de datos y comparar sus resultados. Todo el código y los datos procesados viven en el repositorio del proyecto.
+
+\section{Algoritmos en MapReduce}
+\subsection{PageRank}
+Con $N$ nodos, factor de amortiguamiento $\beta=0.85$ y $M$ la matriz de transición, el vector de rangos cumple
+\begin{equation}
+  r = \beta M r + \frac{1-\beta}{N}\mathbf{1}.
+\end{equation}
+Cada iteración es un MapReduce: el \emph{map} emite, por cada arista $u\to v$, el par $(v, r_u/d_u)$; el \emph{reduce} suma por destino y aplica la fórmula de arriba. Los nodos sin aristas de salida (\emph{colgantes}) reparten su masa $D$ de forma uniforme: $r_v \leftarrow \beta s_v + (1-\beta)/N + \beta D/N$, de modo que $\sum_v r_v = 1$ en todo momento. Las trampas de araña quedan cubiertas por el teletransporte. Se itera hasta $\lVert r_t - r_{t-1}\rVert_1 < 10^{-8}$ o 100 iteraciones.
+
+\subsection{Papel del hash}
+La matriz de enlaces se guarda dispersa como lista de adyacencia $(u,[v_1,\dots,v_k])$, y se \textbf{particiona una sola vez por hash de la clave} $u$ y se cachea. Los vectores de rango se particionan con el mismo hash y el mismo número de particiones, de forma que el \emph{join} entre enlaces y rangos es local a cada partición. Lo único que cruza la red en cada iteración son las contribuciones $(v, r_u/d_u)$ que se agrupan por hash de $v$ en el \emph{shuffle} del reduce.
+
+\subsection{HITS}
+Cada ronda tiene dos pasos MapReduce: autoridad $a_v=\sum_{u\to v}h_u$ (join con el grafo) y hub $h_u=\sum_{u\to v}a_v$ (join con el grafo transpuesto). Después de cada paso se normaliza a norma $L_2$ con una reducción global. Ambos grafos están particionados por hash. La convergencia se mide con la suma de las distancias $L_1$ de $a$ y $h$ entre rondas.
+
+\subsection{PageRank Sensible a Tópico}
+Para cada tópico $t$ con conjunto semilla $S_t$, el teletransporte salta solo a $S_t$:
+\begin{equation}
+  r_t = \beta M r_t + (1-\beta)\frac{\mathbf{e}_{S_t}}{|S_t|}.
+\end{equation}
+Los $T$ vectores se calculan a la vez: el rango de cada nodo es un arreglo de dimensión $T$, así que las contribuciones por arista se comparten entre tópicos en un único shuffle. La masa de los nodos colgantes de cada tópico también vuelve a $S_t$. En la consulta se combinan con pesos $w_t$: $r=\sum_t w_t r_t$.
+
+\section{Datos}
+\subsection{cit-HepPh}
+Red de citas de arXiv hep-ph (SNAP) \cite{leskovec2007graph}: \pend{nodos y aristas finales}. Dirigida, citante $\to$ citado. Los ids del archivo de aristas no tienen ceros a la izquierda y el archivo de fechas no cubre todos los papers, por lo que el año se obtiene del id de arXiv. \textbf{Tópicos:} periodos de publicación (1992--94, 1995--97, 1998--2000, 2001--03).
+
+\subsection{Spotify}
+Red de colaboraciones entre artistas (Kaggle): \pend{nodos y aristas finales}. La red es no dirigida y se convierte en un grafo dirigido simétrico (dos aristas por colaboración). Se eliminaron ids duplicados y 7 aristas hacia artistas inexistentes. \textbf{Tópicos:} macro-géneros por palabras clave sobre \texttt{genres}.
+
+\subsection{Wikipedia}
+Dump \texttt{enwiki} (117 GB, MediaWiki 1.47). Procesamiento:
+\begin{enumerate}
+  \item \textbf{Ingesta:} Spark lee el XML en bloques con delimitador de registro \texttt{</page>}; por página, expresiones regulares extraen título, redirect, enlaces \texttt{[[...]]} y categorías (solo espacio de nombres 0, sin texto). Cada título se identifica con un hash de 64 bits.
+  \item \textbf{Grafo:} se resuelven redirects, se conservan solo destinos que son artículos y se eliminan auto-lazos y repetidos. Se excluyen listas y páginas de desambiguación.
+  \item \textbf{Poda de relevancia:} se eliminan, de forma iterativa, los artículos con menos de \pend{k} enlaces entrantes.
+\end{enumerate}
+\textbf{Tópicos:} \pend{n} macro-tópicos a partir de las categorías de cada artículo. La Tabla~\ref{tab:tamanos} resume los tamaños. \pend{aclarar si los resultados son de la muestra (prefijo del dump) o del dump completo}
+
+\begin{table}[h]
+\centering
+\caption{Tamaño de los grafos.}\label{tab:tamanos}
+\begin{tabular}{lrrr}
+\toprule
+Dataset & Nodos & Aristas & Nodos sin salida\\
+\midrule
+cit-HepPh & \pend{} & \pend{} & \pend{}\\
+Spotify & \pend{} & \pend{} & \pend{}\\
+Wikipedia (muestra) & \pend{} & \pend{} & \pend{}\\
+Wikipedia (completo) & \pend{} & \pend{} & \pend{}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Validación}
+Las implementaciones se verificaron con el grafo de tres nodos del libro (PageRank exacto $(7/33, 5/33, 21/33)$ con $\beta=0.8$) y comparándolas con \texttt{networkx} en cit-HepPh y Spotify (PageRank, HITS y PageRank personalizado). \pend{errores máximos obtenidos}
+
+\section{Resultados}
+\subsection{Rankings}
+\pend{top-10 de PageRank, autoridades y hubs por dataset (tablas generadas en results/tablas/)}
+
+\subsection{PageRank vs.\ HITS vs.\ grado}
+\pend{correlaciones de Spearman y solapamiento del top-20 (results/tablas/comparacion\_algoritmos.csv)}
+
+\begin{figure}[h]
+\centering
+% \includegraphics[width=.9\textwidth]{distribucion_grados.pdf}
+\pend{figura de distribución de grados (report/figuras/distribucion\_grados.pdf)}
+\caption{Distribución de grados de entrada y salida.}
+\end{figure}
+
+\subsection{Sensibilidad a tópico}
+\pend{top por tópico y ejemplo de combinación de consulta}
+
+\subsection{Convergencia}
+\pend{iteraciones y tiempos por algoritmo y dataset; figura convergencia.pdf}
+
+\section{Discusión}
+\begin{itemize}
+  \item En Spotify la red es simétrica: hubs y autoridades coinciden, y PageRank es casi proporcional al grado.
+  \item En Wikipedia solo se cuentan enlaces escritos en el wikitext (no los generados por plantillas), y \pend{la muestra es un prefijo del dump ordenado por id de página}.
+  \item Los tópicos se definen por palabras clave en categorías o géneros, lo que es una aproximación.
+  \item \pend{observaciones sobre los rankings}
+\end{itemize}
+
+\section{Conclusiones}
+\pend{conclusiones}
+
+\bibliographystyle{plain}
+\bibliography{referencias}
+
+\end{document}

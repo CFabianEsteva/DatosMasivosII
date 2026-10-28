@@ -1,0 +1,10 @@
+# Python 3.11 o 3.12 (pyspark todavía no soporta bien 3.14). Java 17 o 21 instalado.
+pyspark>=3.5.1,<4.1
+numpy>=1.26
+pandas>=2.1
+pyarrow>=14
+scipy>=1.11
+networkx>=3.2
+matplotlib>=3.8
+ipykernel>=6.29
+nbformat>=5.9
