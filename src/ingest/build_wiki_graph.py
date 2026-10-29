@@ -158,7 +158,8 @@ def run_build(spark, out_dir=None, min_indegree=MIN_INDEGREE, max_prune_iter=MAX
 if __name__ == "__main__":
     # %%
     from src.common.spark_session import get_spark
+    from src.ingest.build_wiki_graph import run_build as run_build_module  # importar el módulo para los workers
 
     spark = get_spark("wiki-graph", shuffle_partitions=64)
     # %%
-    run_build(spark)
+    run_build_module(spark)

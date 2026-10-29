@@ -184,7 +184,10 @@ def run_ingest(spark, xml_path=ENWIKI_XML, out_dir=None, max_bytes=MAX_BYTES, sp
 if __name__ == "__main__":
     # %%
     from src.common.spark_session import get_spark
+    # Se importa el módulo (en vez de usar las funciones de __main__) para que los workers de Spark
+    # puedan deserializar `parse_record` y `target_hash` por referencia.
+    from src.ingest.parse_wiki import run_ingest as run_ingest_module
 
     spark = get_spark("wiki-ingest", shuffle_partitions=64)
     # %%
-    run_ingest(spark)
+    run_ingest_module(spark)

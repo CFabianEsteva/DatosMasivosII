@@ -1,53 +1,37 @@
-"""PageRank en MapReduce sobre RDDs de PySpark (Leskovec et al., cap. 5.2).
+"""PageRank en MapReduce sobre PySpark (Leskovec et al., cap. 5.2).
 
-Una iteración (ranks r, matriz de enlaces `links` particionada por hash):
-  Map    : para cada (u, destinos) con rango r_u emite (v, r_u / deg(u)) por cada destino v
-  Reduce : s_v = suma de las contribuciones que llegan a v           (reduceByKey)
-  Update : r_v = beta * s_v + (1 - beta)/N + beta * D/N              (D = masa de nodos sin salida)
+Una iteración (r = vector de rangos, difundido a las tareas; aristas particionadas por hash del origen):
+  Map    : cada tarea recorre sus aristas u -> v y emite r_u / deg(u) hacia v, consolidando localmente
+           (combiner) en un vector parcial de N sumas
+  Reduce : los vectores parciales se suman en árbol -> s_v = suma de contribuciones que llegan a v
+  Update : r_v = beta * s_v + (1 - beta)/N + beta * D/N        (D = masa de los nodos sin salida)
 El teletransporte (1-beta) cubre las trampas de araña, y la masa D de los nodos colgantes se
 redistribuye de forma uniforme, de modo que el vector siempre suma 1.
 """
 import time
-from operator import add
 
-from src.common.graph_io import LEVEL
-
-
-def _spread(kv):
-    """Map: (u, (destinos, r_u)) -> (v, r_u/deg(u)) para cada destino."""
-    dsts, r = kv[1]
-    share = r / len(dsts)
-    return ((d, share) for d in dsts)
+import numpy as np
 
 
-def pagerank(graph, beta=0.85, tol=1e-8, max_iter=100, checkpoint_every=10, verbose=True):
+def pagerank(graph, beta=0.85, tol=1e-8, max_iter=100, verbose=True):
     """Devuelve (ranks, history).
 
-    ranks   : RDD (nodo, rango) persistido, suma 1
-    history : lista con la distancia L1 entre iteraciones consecutivas (curva de convergencia)
+    ranks   : ndarray de N rangos (suma 1), indexado por id de nodo
+    history : distancia L1 entre iteraciones consecutivas (curva de convergencia)
     """
-    P, N = graph.P, graph.N
-    ranks = graph.nodes.mapValues(lambda _: 1.0 / N).persist(LEVEL)
+    N = graph.N
+    r = np.full(N, 1.0 / N)
     history = []
     t0 = time.time()
-
     for it in range(1, max_iter + 1):
-        sums = graph.links.join(ranks, P).flatMap(_spread).reduceByKey(add, P)
-        dangling = ranks.join(graph.dangling, P).map(lambda kv: kv[1][0]).sum()
-        base = (1.0 - beta) / N + beta * dangling / N
-
-        new = ranks.leftOuterJoin(sums, P).mapValues(
-            lambda v: base + beta * (v[1] if v[1] is not None else 0.0)
-        ).persist(LEVEL)
-        if checkpoint_every and it % checkpoint_every == 0:
-            new.checkpoint()
-
-        delta = ranks.join(new, P).map(lambda kv: abs(kv[1][0] - kv[1][1])).sum()  # fuerza el cómputo
-        ranks.unpersist()
-        ranks = new
+        s = graph.propagate(r * graph.inv_out)
+        dangling = r[graph.dangling].sum()
+        new = beta * s + (1.0 - beta) / N + beta * dangling / N
+        delta = float(np.abs(new - r).sum())
+        r = new
         history.append(delta)
         if verbose:
-            print(f"[PageRank] iter {it:3d}  L1={delta:.3e}  ({time.time() - t0:.0f}s)")
+            print(f"[PageRank] iter {it:3d}  L1={delta:.3e}  ({time.time() - t0:.0f}s)", flush=True)
         if delta < tol:
             break
-    return ranks, history
+    return r, history

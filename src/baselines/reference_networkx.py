@@ -29,11 +29,9 @@ TOL_OK = 1e-6
 
 def toy_check(spark):
     """y->{y,a}, a->{y,m}, m->{m}; con beta=0.8 el PageRank es (7/33, 5/33, 21/33)."""
-    sc = spark.sparkContext
-    edges = sc.parallelize([(0, 0), (0, 1), (1, 0), (1, 2), (2, 2)])
-    graph = Graph(edges, num_partitions=4)
-    ranks, _ = pagerank(graph, beta=0.8, tol=1e-13, max_iter=500, checkpoint_every=0, verbose=False)
-    got = dict(ranks.collect())
+    graph = Graph.from_pairs(spark, [(0, 0), (0, 1), (1, 0), (1, 2), (2, 2)], N=3, num_partitions=2)
+    ranks, _ = pagerank(graph, beta=0.8, tol=1e-13, max_iter=500, verbose=False)
+    got = {i: float(v) for i, v in enumerate(ranks)}
     expected = {0: 7 / 33, 1: 5 / 33, 2: 21 / 33}
     err = max(abs(got[k] - expected[k]) for k in expected)
     print(f"[toy] obtenido={ {k: round(v, 6) for k, v in got.items()} }  esperado={ {k: round(v, 6) for k, v in expected.items()} }")
